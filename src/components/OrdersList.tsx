@@ -7,6 +7,7 @@ import {
   MapPin, CheckCircle2, Clock, XCircle, Download, Plus, Zap
 } from 'lucide-react';
 import OrderDetailsModal from './OrderDetailsModal';
+import CreateOrderModal from './CreateOrderModal';
 
 interface Props { 
   lang: Lang;
@@ -55,7 +56,10 @@ const t = {
     loading: 'جاري تحميل الطلبات...',
     refresh: 'تحديث القائمة',
     exportCSV: 'تصدير CSV',
-    simulateOrder: 'إضافة / محاكاة طرد',
+    simulateOrder: 'محاكاة Webhook',
+    pushToSendit: 'دفع شحنة إلى Sendit',
+    syncSendit: 'مزامنة حية مع Sendit',
+    syncing: 'جاري المزامنة...',
     total: 'إجمالي الطلبات',
     criticalCount: 'طلبات حرجة',
     messageSent: 'تم الإرسال بنجاح',
@@ -85,7 +89,10 @@ const t = {
     loading: 'Chargement des colis...',
     refresh: 'Actualiser',
     exportCSV: 'Exporter CSV',
-    simulateOrder: 'Simuler Colis',
+    simulateOrder: 'Simuler Webhook',
+    pushToSendit: 'Pousser vers Sendit',
+    syncSendit: 'Sync Directe Sendit',
+    syncing: 'Synchronisation...',
     total: 'Total Colis',
     criticalCount: 'Colis Critiques',
     messageSent: 'Envoyé avec succès',
@@ -105,6 +112,11 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
   const [statusFilter, setStatusFilter] = useState('');
   const [riskFilter, setRiskFilter] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  // Sendit Live Sync state
+  const [syncingSendit, setSyncingSendit] = useState(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
 
   // Quick AI generation state
   const [generatingId, setGeneratingId] = useState<string | null>(null);
@@ -131,6 +143,30 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
     const debounce = setTimeout(fetchOrders, 300);
     return () => clearTimeout(debounce);
   }, [fetchOrders]);
+
+  const handleLiveSync = async () => {
+    setSyncingSendit(true);
+    try {
+      const res = await fetch('/api/sendit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sync' }),
+      });
+      const data = await res.json();
+      await fetchOrders();
+      setSyncToast(
+        isAr 
+          ? `تمت المزامنة بنجاح! تم تحديث ${data.syncedCount || 0} شحنة مع Sendit` 
+          : `Synchronisation réussie ! ${data.syncedCount || 0} colis mis à jour`
+      );
+      setTimeout(() => setSyncToast(null), 4000);
+    } catch {
+      setSyncToast(isAr ? 'فشلت المزامنة' : 'Échec de synchronisation');
+      setTimeout(() => setSyncToast(null), 3000);
+    }
+    setSyncingSendit(false);
+  };
+
 
   const handleQuickAI = async (order: any, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -226,13 +262,34 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            {/* Push New Delivery to Sendit */}
+            <button
+              onClick={() => setCreateModalOpen(true)}
+              className="btn-primary text-xs py-2 px-3.5 rounded-xl shadow-purple-900/40 font-bold flex items-center gap-1.5"
+            >
+              <Plus size={15} className="text-white" />
+              <span>{tr.pushToSendit}</span>
+            </button>
+
+            {/* Live Sync with Sendit */}
+            <button
+              onClick={handleLiveSync}
+              disabled={syncingSendit}
+              className="py-2 px-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              title={tr.syncSendit}
+            >
+              <RefreshCw size={14} className={syncingSendit ? 'animate-spin text-cyan-400' : 'text-cyan-400'} />
+              <span>{syncingSendit ? tr.syncing : tr.syncSendit}</span>
+            </button>
+
             {onOpenSimulator && (
               <button
                 onClick={onOpenSimulator}
-                className="btn-primary text-xs py-2 px-3 rounded-xl"
+                className="btn-secondary text-xs py-2 px-2.5 rounded-xl text-slate-300"
+                title={tr.simulateOrder}
               >
-                <Zap size={14} className="text-yellow-300" />
-                <span>{tr.simulateOrder}</span>
+                <Zap size={14} className="text-amber-400" />
+                <span className="hidden xl:inline">{tr.simulateOrder}</span>
               </button>
             )}
 
@@ -254,6 +311,22 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
             </button>
           </div>
         </div>
+
+        {/* Sync Toast Notification */}
+        {syncToast && (
+          <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-950/60 to-purple-950/60 border border-cyan-500/40 text-cyan-200 text-xs font-semibold flex items-center justify-between animate-fade-up">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-cyan-400" />
+              <span>{syncToast}</span>
+            </div>
+            <button 
+              onClick={() => setSyncToast(null)} 
+              className="text-cyan-400/80 hover:text-cyan-200 text-xs"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Filter Pills */}
         <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-800/80">
@@ -448,6 +521,16 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
           onOrderUpdated={fetchOrders}
         />
       )}
+
+      {/* Push Order to Sendit Modal */}
+      <CreateOrderModal
+        isOpen={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        lang={lang}
+        onSuccess={() => {
+          fetchOrders();
+        }}
+      />
     </div>
   );
 }

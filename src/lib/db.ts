@@ -281,6 +281,9 @@ export async function dbExecute(sql: string, params: any[] = []): Promise<{ inse
   }
 }
 
+export const dbRun = dbExecute;
+
+
 // Backwards compatibility layer for legacy code calling getDb()
 export function getDb(): any {
   if (isMySQL) {
