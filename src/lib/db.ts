@@ -100,15 +100,23 @@ export async function initDatabase() {
         client_name VARCHAR(255),
         client_phone VARCHAR(50),
         city VARCHAR(100),
+        address TEXT,
+        price DECIMAL(10,2) DEFAULT 0,
         status VARCHAR(100),
         previous_status VARCHAR(100),
         attempt_count INT DEFAULT 0,
         last_updated VARCHAR(50),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         notes TEXT,
-        risk_level VARCHAR(50) DEFAULT 'low'
+        risk_level VARCHAR(50) DEFAULT 'low',
+        ai_recommendation TEXT
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    try { await pool.query('ALTER TABLE orders ADD COLUMN address TEXT'); } catch {}
+    try { await pool.query('ALTER TABLE orders ADD COLUMN price DECIMAL(10,2) DEFAULT 0'); } catch {}
+    try { await pool.query('ALTER TABLE orders ADD COLUMN ai_recommendation TEXT'); } catch {}
+
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS events (
@@ -116,12 +124,22 @@ export async function initDatabase() {
         order_id VARCHAR(191),
         tracking VARCHAR(191),
         event_type VARCHAR(100),
+        status VARCHAR(100),
+        reason VARCHAR(255),
+        note TEXT,
+        timestamp VARCHAR(50),
         old_status VARCHAR(100),
         new_status VARCHAR(100),
         raw_payload TEXT,
         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    try { await pool.query('ALTER TABLE events ADD COLUMN status VARCHAR(100)'); } catch {}
+    try { await pool.query('ALTER TABLE events ADD COLUMN reason VARCHAR(255)'); } catch {}
+    try { await pool.query('ALTER TABLE events ADD COLUMN note TEXT'); } catch {}
+    try { await pool.query('ALTER TABLE events ADD COLUMN timestamp VARCHAR(50)'); } catch {}
+
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS messages (

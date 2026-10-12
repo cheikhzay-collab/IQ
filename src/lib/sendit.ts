@@ -123,13 +123,14 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
   // Save into local database
   await dbRun(
     `INSERT INTO orders 
-      (id, tracking, client_name, client_phone, city, address, price, status, attempt_count, risk_level, ai_recommendation, last_updated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, tracking, client_name, client_phone, city, address, price, notes, status, attempt_count, risk_level, ai_recommendation, last_updated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE 
       client_name = VALUES(client_name),
       client_phone = VALUES(client_phone),
       city = VALUES(city),
       price = VALUES(price),
+      notes = VALUES(notes),
       last_updated = VALUES(last_updated)`,
     [
       finalTracking,
@@ -139,6 +140,7 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
       params.city,
       params.address,
       params.price,
+      params.productNote || 'Colis Sendit',
       initialStatus,
       0,
       'low',
@@ -149,9 +151,10 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
 
   // Record initial event
   await dbRun(
-    `INSERT INTO events (order_id, status, reason, note, timestamp)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO events (order_id, tracking, status, reason, note, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [
+      finalTracking,
       finalTracking,
       initialStatus,
       'Création Colis Sendit',
@@ -159,6 +162,7 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
       now
     ]
   );
+
 
   return {
     success: true,
@@ -215,8 +219,8 @@ export async function syncSenditDeliveries() {
 
           await dbRun(
             `INSERT INTO orders 
-              (id, tracking, client_name, client_phone, city, address, price, status, attempt_count, risk_level, ai_recommendation, last_updated)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, tracking, client_name, client_phone, city, address, price, notes, status, attempt_count, risk_level, ai_recommendation, last_updated)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE 
               status = VALUES(status),
               attempt_count = VALUES(attempt_count),
@@ -230,6 +234,7 @@ export async function syncSenditDeliveries() {
               d.client?.city || d.city || 'Casablanca',
               d.client?.address || d.address || '',
               Number(d.price || d.total || 250),
+              d.delivery?.comment || 'Colis Sendit API',
               status,
               Number(d.attempts || 1),
               riskLevel,
@@ -267,10 +272,11 @@ export async function syncSenditDeliveries() {
       );
 
       await dbRun(
-        `INSERT INTO events (order_id, status, reason, note, timestamp)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO events (order_id, tracking, status, reason, note, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [
           ord.id,
+          ord.tracking || ord.id,
           nextStatus,
           'Mise à jour Sendit Live',
           `تحديث تلقائي عبر مزامنة Sendit الفورية`,
