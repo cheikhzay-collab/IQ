@@ -5,16 +5,18 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@tailwindcss/postcss": "^4.3.3",
     "@tailwindcss/turbopack": "^4",
     "better-sqlite3": "^13.0.3",
     "lucide-react": "^1.55.0",
     "next": "16.4.0",
+    "postcss": "^8.5.29",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "recharts": "^3.10.1",
