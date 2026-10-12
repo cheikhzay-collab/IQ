@@ -1,12 +1,11 @@
 // app/api/messages/route.ts - WhatsApp messages management
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { dbQuery, dbQueryOne, dbExecute } from '@/lib/db';
 import { sendWhatsAppMessage } from '@/lib/whatsapp';
 import { generateWhatsAppMessage } from '@/lib/gemini';
 
 // GET - list messages
 export async function GET(req: NextRequest) {
-  const db = getDb();
   const { searchParams } = new URL(req.url);
   const status = searchParams.get('status');
   const orderId = searchParams.get('orderId');
@@ -19,19 +18,17 @@ export async function GET(req: NextRequest) {
 
   query += ' ORDER BY m.created_at DESC LIMIT 100';
 
-  const messages = db.prepare(query).all(...params);
+  const messages = await dbQuery(query, params);
   return NextResponse.json({ messages });
 }
 
 // POST - generate or send a message
 export async function POST(req: NextRequest) {
-  const db = getDb();
   const body = await req.json();
-
   const { action, orderId, language, messageText, messageId } = body;
 
   if (action === 'generate') {
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+    const order = await dbQueryOne<any>('SELECT * FROM orders WHERE id = ?', [orderId]);
     if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
 
     const message = await generateWhatsAppMessage({
@@ -48,7 +45,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'send') {
-    const msg = db.prepare('SELECT m.*, o.tracking FROM messages m LEFT JOIN orders o ON m.order_id = o.id WHERE m.id = ?').get(messageId) as any;
+    const msg = await dbQueryOne<any>('SELECT m.*, o.tracking FROM messages m LEFT JOIN orders o ON m.order_id = o.id WHERE m.id = ?', [messageId]);
     if (!msg) return NextResponse.json({ error: 'Message not found' }, { status: 404 });
 
     const finalText = messageText || msg.message_text;
@@ -58,23 +55,25 @@ export async function POST(req: NextRequest) {
       orderTracking: msg.tracking,
     });
 
-    db.prepare('UPDATE messages SET status = ?, whatsapp_message_id = ?, sent_at = datetime(\'now\'), message_text = ? WHERE id = ?')
-      .run(result.success ? 'sent' : 'failed', result.messageId || null, finalText, messageId);
+    const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    await dbExecute(
+      'UPDATE messages SET status = ?, whatsapp_message_id = ?, sent_at = ?, message_text = ? WHERE id = ?',
+      [result.success ? 'sent' : 'failed', result.messageId || null, nowIso, finalText, messageId]
+    );
 
     return NextResponse.json({ success: result.success, error: result.error });
   }
 
   if (action === 'create') {
-    // Manually create a message for an order
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+    const order = await dbQueryOne<any>('SELECT * FROM orders WHERE id = ?', [orderId]);
     if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
 
-    const id = db.prepare(`
+    const insertRes = await dbExecute(`
       INSERT INTO messages (order_id, client_phone, message_text, language, status, generated_by)
       VALUES (?, ?, ?, ?, 'pending', 'manual')
-    `).run(orderId, order.client_phone, messageText, language || 'ar').lastInsertRowid;
+    `, [orderId, order.client_phone, messageText, language || 'ar']);
 
-    return NextResponse.json({ success: true, messageId: id });
+    return NextResponse.json({ success: true, messageId: insertRes.insertId });
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

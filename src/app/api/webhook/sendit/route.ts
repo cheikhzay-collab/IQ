@@ -1,6 +1,6 @@
 // app/api/webhook/sendit/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { dbQueryOne, dbExecute } from '@/lib/db';
 import { generateWhatsAppMessage, analyzeRiskLevel } from '@/lib/gemini';
 import { sendWhatsAppMessage } from '@/lib/whatsapp';
 import crypto from 'crypto';
@@ -12,9 +12,8 @@ function verifySignature(payload: string, signature: string, secret: string): bo
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-  const db = getDb();
-  const secretFromDb = (db.prepare("SELECT value FROM settings WHERE key = 'sendit_webhook_secret'").get() as any)?.value;
-  const webhookSecret = process.env.SENDIT_WEBHOOK_SECRET || secretFromDb;
+  const secretRow = await dbQueryOne<any>("SELECT `value` FROM settings WHERE `key` = 'sendit_webhook_secret'");
+  const webhookSecret = process.env.SENDIT_WEBHOOK_SECRET || secretRow?.value;
   const signature = req.headers.get('x-webhook-signature') || req.headers.get('x-sendit-signature') || req.headers.get('x-signature') || '';
 
   // Verify signature if secret is set and signature header is present
@@ -46,31 +45,34 @@ export async function POST(req: NextRequest) {
     const previousStatus = payload.previous_status || payload.ancien_statut || '';
 
     // Get existing order
-    const existing = db.prepare('SELECT * FROM orders WHERE id = ? OR tracking = ?').get(orderId, tracking) as any;
+    const existing = await dbQueryOne<any>('SELECT * FROM orders WHERE id = ? OR tracking = ?', [orderId, tracking]);
     const attemptCount = (existing?.attempt_count || 0) + (
       ['Reporté', 'Refusé', 'Absence'].includes(newStatus) ? 1 : 0
     );
 
     // Determine risk level
     const riskLevel = await analyzeRiskLevel({ status: newStatus, attemptCount, city });
+    const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-    // Upsert order
-    db.prepare(`
-      INSERT INTO orders (id, tracking, client_name, client_phone, city, status, previous_status, attempt_count, last_updated, risk_level)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
-      ON CONFLICT(id) DO UPDATE SET
-        status = excluded.status,
-        previous_status = excluded.previous_status,
-        attempt_count = excluded.attempt_count,
-        last_updated = excluded.last_updated,
-        risk_level = excluded.risk_level
-    `).run(orderId, tracking, clientName, clientPhone, city, newStatus, previousStatus, attemptCount, riskLevel);
+    if (existing) {
+      await dbExecute(`
+        UPDATE orders SET
+          tracking = ?, client_name = ?, client_phone = ?, city = ?, status = ?,
+          previous_status = ?, attempt_count = ?, last_updated = ?, risk_level = ?
+        WHERE id = ?
+      `, [tracking, clientName, clientPhone, city, newStatus, previousStatus, attemptCount, nowIso, riskLevel, existing.id]);
+    } else {
+      await dbExecute(`
+        INSERT INTO orders (id, tracking, client_name, client_phone, city, status, previous_status, attempt_count, last_updated, risk_level)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [orderId, tracking, clientName, clientPhone, city, newStatus, previousStatus, attemptCount, nowIso, riskLevel]);
+    }
 
     // Log event
-    db.prepare(`
+    await dbExecute(`
       INSERT INTO events (order_id, tracking, event_type, old_status, new_status, raw_payload)
       VALUES (?, ?, 'status_update', ?, ?, ?)
-    `).run(orderId, tracking, previousStatus, newStatus, rawBody);
+    `, [orderId, tracking, previousStatus, newStatus, rawBody]);
 
     // Create alert for critical/high risk
     if (['critical', 'high'].includes(riskLevel)) {
@@ -78,15 +80,16 @@ export async function POST(req: NextRequest) {
         ? `⚠️ طلب ${tracking} وصل للمستوى الحرج (${attemptCount} محاولات) - ${clientName} - ${city}`
         : `🔶 طلب ${tracking} مرفوض من ${clientName} في ${city}`;
 
-      db.prepare(`
+      await dbExecute(`
         INSERT INTO alerts (order_id, tracking, alert_type, priority, message)
         VALUES (?, ?, 'risk', ?, ?)
-      `).run(orderId, tracking, riskLevel, alertMsg);
+      `, [orderId, tracking, riskLevel, alertMsg]);
     }
 
     // Auto-send WhatsApp for critical orders or specific statuses
     const autoSendStatuses = ['Reporté', 'Refusé', 'En cours de livraison'];
-    const defaultLang = (db.prepare('SELECT value FROM settings WHERE key = ?').get('default_language') as any)?.value || 'ar';
+    const langRow = await dbQueryOne<any>("SELECT `value` FROM settings WHERE `key` = 'default_language'");
+    const defaultLang = langRow?.value || 'ar';
 
     if (clientPhone && autoSendStatuses.includes(newStatus)) {
       const message = await generateWhatsAppMessage({
@@ -99,18 +102,22 @@ export async function POST(req: NextRequest) {
         language: defaultLang as 'ar' | 'fr',
       });
 
-      // Save pending message (agent can review before sending or auto-send)
-      const autoSend = (db.prepare('SELECT value FROM settings WHERE key = ?').get('auto_send_whatsapp') as any)?.value === 'true';
+      const autoSendRow = await dbQueryOne<any>("SELECT `value` FROM settings WHERE `key` = 'auto_send_whatsapp'");
+      const autoSend = autoSendRow?.value === 'true';
 
-      const msgId = db.prepare(`
+      const insertRes = await dbExecute(`
         INSERT INTO messages (order_id, client_phone, message_text, language, status, generated_by)
         VALUES (?, ?, ?, ?, ?, 'ai')
-      `).run(orderId, clientPhone, message, defaultLang, autoSend ? 'sending' : 'pending').lastInsertRowid;
+      `, [orderId, clientPhone, message, defaultLang, autoSend ? 'sending' : 'pending']);
 
-      if (autoSend) {
+      const msgId = insertRes.insertId;
+
+      if (autoSend && msgId) {
         const result = await sendWhatsAppMessage({ to: clientPhone, message, orderTracking: tracking });
-        db.prepare('UPDATE messages SET status = ?, whatsapp_message_id = ?, sent_at = datetime(\'now\') WHERE id = ?')
-          .run(result.success ? 'sent' : 'failed', result.messageId || null, msgId);
+        await dbExecute(
+          'UPDATE messages SET status = ?, whatsapp_message_id = ?, sent_at = ? WHERE id = ?',
+          [result.success ? 'sent' : 'failed', result.messageId || null, nowIso, msgId]
+        );
       }
     }
 
@@ -122,6 +129,6 @@ export async function POST(req: NextRequest) {
 }
 
 // Sendit may send a GET to verify the webhook endpoint
-export async function GET(req: NextRequest) {
+export async function GET() {
   return NextResponse.json({ status: 'DeliveryIQ webhook active', timestamp: new Date().toISOString() });
 }

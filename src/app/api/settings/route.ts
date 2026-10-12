@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { dbQuery, dbExecute, dbQueryOne } from '@/lib/db';
 
 export async function GET() {
-  const db = getDb();
-  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  const rows = await dbQuery<{ key: string; value: string }>('SELECT `key`, `value` FROM settings');
   
   const settingsMap: Record<string, string> = {};
   for (const row of rows) {
@@ -28,13 +27,6 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const db = getDb();
-
-    const upsert = db.prepare(`
-      INSERT INTO settings (key, value, updated_at) 
-      VALUES (?, ?, datetime('now')) 
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `);
 
     const mapping: Record<string, string | undefined> = {
       'sendit_libelle': body.senditLibelle,
@@ -50,15 +42,16 @@ export async function POST(req: NextRequest) {
       'critical_threshold': body.criticalThreshold,
     };
 
-    const transaction = db.transaction(() => {
-      for (const [key, val] of Object.entries(mapping)) {
-        if (val !== undefined) {
-          upsert.run(key, val);
+    for (const [key, val] of Object.entries(mapping)) {
+      if (val !== undefined) {
+        const existing = await dbQueryOne('SELECT `key` FROM settings WHERE `key` = ?', [key]);
+        if (existing) {
+          await dbExecute('UPDATE settings SET `value` = ? WHERE `key` = ?', [val, key]);
+        } else {
+          await dbExecute('INSERT INTO settings (`key`, `value`) VALUES (?, ?)', [key, val]);
         }
       }
-    });
-
-    transaction();
+    }
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

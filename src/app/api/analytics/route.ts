@@ -1,22 +1,22 @@
 // app/api/analytics/route.ts - Dashboard stats
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { dbQuery, dbQueryOne } from '@/lib/db';
 import { generateAnalyticsSummary } from '@/lib/gemini';
 
 export async function GET(req: NextRequest) {
-  const db = getDb();
   const { searchParams } = new URL(req.url);
   const lang = (searchParams.get('lang') || 'ar') as 'ar' | 'fr';
 
   // Status counts
-  const statusStats = db.prepare(`
+  const statusStats = await dbQuery<{ status: string; count: number }>(`
     SELECT status, COUNT(*) as count FROM orders GROUP BY status
-  `).all() as { status: string; count: number }[];
+  `);
 
   const statsMap: Record<string, number> = {};
-  statusStats.forEach(s => { statsMap[s.status] = s.count; });
+  statusStats.forEach(s => { statsMap[s.status] = Number(s.count); });
 
-  const total = (db.prepare('SELECT COUNT(*) as c FROM orders').get() as any).c;
+  const totalRow = await dbQueryOne<any>('SELECT COUNT(*) as c FROM orders');
+  const total = Number(totalRow?.c || 0);
   const delivered = statsMap['Livré'] || 0;
   const refused = statsMap['Refusé'] || 0;
   const postponed = statsMap['Reporté'] || 0;
@@ -24,45 +24,50 @@ export async function GET(req: NextRequest) {
   const waiting = statsMap['En attente'] || 0;
 
   // Risk level counts
-  const riskStats = db.prepare(`
+  const riskStats = await dbQuery<{ risk_level: string; count: number }>(`
     SELECT risk_level, COUNT(*) as count FROM orders GROUP BY risk_level
-  `).all() as { risk_level: string; count: number }[];
+  `);
 
   const riskMap: Record<string, number> = {};
-  riskStats.forEach(r => { riskMap[r.risk_level] = r.count; });
+  riskStats.forEach(r => { riskMap[r.risk_level] = Number(r.count); });
 
   // City breakdown
-  const cityStats = db.prepare(`
-    SELECT city, COUNT(*) as count FROM orders WHERE city != '' GROUP BY city ORDER BY count DESC LIMIT 10
-  `).all() as { city: string; count: number }[];
+  const cityStats = await dbQuery<{ city: string; count: number }>(`
+    SELECT city, COUNT(*) as count FROM orders WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY count DESC LIMIT 10
+  `);
 
   // Daily trend (last 7 days)
-  const trend = db.prepare(`
-    SELECT DATE(last_updated) as date, COUNT(*) as total,
-      SUM(CASE WHEN status = 'Livré' THEN 1 ELSE 0 END) as delivered,
-      SUM(CASE WHEN status = 'Refusé' THEN 1 ELSE 0 END) as refused
-    FROM orders
-    WHERE last_updated >= datetime('now', '-7 days')
-    GROUP BY DATE(last_updated)
-    ORDER BY date ASC
-  `).all();
+  let trend: any[] = [];
+  try {
+    trend = await dbQuery(`
+      SELECT DATE(last_updated) as date, COUNT(*) as total,
+        SUM(CASE WHEN status = 'Livré' THEN 1 ELSE 0 END) as delivered,
+        SUM(CASE WHEN status = 'Refusé' THEN 1 ELSE 0 END) as refused
+      FROM orders
+      GROUP BY DATE(last_updated)
+      ORDER BY date ASC
+      LIMIT 7
+    `);
+  } catch {
+    trend = [];
+  }
 
   // Recent alerts
-  const recentAlerts = db.prepare(`
+  const recentAlerts = await dbQuery(`
     SELECT * FROM alerts ORDER BY created_at DESC LIMIT 10
-  `).all();
+  `);
 
   // WhatsApp stats
-  const waStats = db.prepare(`
+  const waStats = await dbQuery<{ status: string; count: number }>(`
     SELECT status, COUNT(*) as count FROM messages GROUP BY status
-  `).all() as { status: string; count: number }[];
+  `);
   const waMap: Record<string, number> = {};
-  waStats.forEach(w => { waMap[w.status] = w.count; });
+  waStats.forEach(w => { waMap[w.status] = Number(w.count); });
 
   // AI summary
   const aiSummary = total > 0 ? await generateAnalyticsSummary({
     total, delivered, refused, postponed,
-    cityBreakdown: Object.fromEntries(cityStats.map(c => [c.city, c.count])),
+    cityBreakdown: Object.fromEntries(cityStats.map(c => [c.city, Number(c.count)])),
     language: lang,
   }) : '';
 

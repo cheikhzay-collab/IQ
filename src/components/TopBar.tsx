@@ -1,6 +1,6 @@
 'use client';
 import React, { useState } from 'react';
-import { Menu, Globe, Bell, Zap, RefreshCw, Database } from 'lucide-react';
+import { Menu, Globe, Bell, Zap, RefreshCw, Sun, Moon, LogOut, UserCheck } from 'lucide-react';
 import type { Lang, Page } from '@/app/page';
 
 interface TopBarProps {
@@ -12,6 +12,10 @@ interface TopBarProps {
   setCurrentPage: (p: Page) => void;
   onOpenSimulator: () => void;
   onResetData: () => void;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
+  user?: { name: string; email: string; role: string } | null;
+  onLogout?: () => void;
 }
 
 const pageTitles: Record<string, { ar: string; fr: string; subtitle: { ar: string; fr: string } }> = {
@@ -49,7 +53,8 @@ const pageTitles: Record<string, { ar: string; fr: string; subtitle: { ar: strin
 
 export default function TopBar({ 
   lang, setLang, currentPage, setSidebarOpen, unreadAlerts, 
-  setCurrentPage, onOpenSimulator, onResetData 
+  setCurrentPage, onOpenSimulator, onResetData,
+  theme = 'dark', onToggleTheme, user, onLogout
 }: TopBarProps) {
   const isAr = lang === 'ar';
   const pageInfo = pageTitles[currentPage] || pageTitles.dashboard;
@@ -60,10 +65,6 @@ export default function TopBar({
     await onResetData();
     setTimeout(() => setResetting(false), 800);
   };
-
-  const now = new Date().toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-  });
 
   return (
     <header className="flex items-center justify-between px-5 py-3.5 bg-[#090e1a]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-30 flex-shrink-0 transition-all">
@@ -87,7 +88,7 @@ export default function TopBar({
       </div>
 
       {/* Right / End: Actions */}
-      <div className="flex items-center gap-2.5 flex-shrink-0">
+      <div className="flex items-center gap-2 md:gap-2.5 flex-shrink-0">
         {/* Webhook Simulator Button */}
         <button
           onClick={onOpenSimulator}
@@ -97,6 +98,25 @@ export default function TopBar({
           <Zap size={14} className="text-yellow-300" />
           <span className="hidden md:inline">{isAr ? 'محاكاة Webhook' : 'Simuler Webhook'}</span>
         </button>
+
+        {/* Theme Toggle Button (Light / Dark) */}
+        {onToggleTheme && (
+          <button
+            onClick={onToggleTheme}
+            className="p-2 rounded-xl bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/70 transition text-slate-200"
+            title={
+              theme === 'dark' 
+                ? (isAr ? 'التبديل إلى الوضع النهاري' : 'Passer au mode Clair') 
+                : (isAr ? 'التبديل إلى الوضع الليلي' : 'Passer au mode Sombre')
+            }
+          >
+            {theme === 'dark' ? (
+              <Sun size={17} className="text-amber-400" />
+            ) : (
+              <Moon size={17} className="text-indigo-400" />
+            )}
+          </button>
+        )}
 
         {/* Reset Demo Data */}
         <button
@@ -126,14 +146,34 @@ export default function TopBar({
         {/* Language switch */}
         <button
           onClick={() => setLang(lang === 'ar' ? 'fr' : 'ar')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/70 text-xs font-semibold text-slate-200 transition"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/70 text-xs font-semibold text-slate-200 transition"
         >
           <Globe size={13} className="text-purple-400" />
-          <span>{lang === 'ar' ? 'Français' : 'العربية'}</span>
+          <span className="hidden sm:inline">{lang === 'ar' ? 'Français' : 'العربية'}</span>
+          <span className="sm:hidden">{lang === 'ar' ? 'FR' : 'ع'}</span>
         </button>
 
+        {/* Admin Badge & Logout */}
+        {user && (
+          <div className="flex items-center gap-2 ps-1 border-s border-slate-800">
+            <div className="hidden xl:flex flex-col text-start leading-none pe-1">
+              <span className="text-xs font-bold text-slate-200">{user.name || 'مدير النظام'}</span>
+              <span className="text-[10px] text-purple-400">{user.role || 'Admin'}</span>
+            </div>
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition"
+                title={isAr ? 'تسجيل الخروج' : 'Déconnexion'}
+              >
+                <LogOut size={16} />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Live System Status Dot */}
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+        <div className="hidden 2xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
           <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
           <span className="text-[11px] text-emerald-400 font-semibold">
             {isAr ? 'Webhook نشط' : 'Webhook Actif'}

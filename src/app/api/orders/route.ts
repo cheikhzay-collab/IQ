@@ -1,9 +1,8 @@
 // app/api/orders/route.ts - Get all orders with filters
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { dbQuery, dbQueryOne } from '@/lib/db';
 
 export async function GET(req: NextRequest) {
-  const db = getDb();
   const { searchParams } = new URL(req.url);
 
   const status = searchParams.get('status');
@@ -27,8 +26,9 @@ export async function GET(req: NextRequest) {
   query += ' ORDER BY last_updated DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
 
-  const orders = db.prepare(query).all(...params);
-  const total = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
+  const orders = await dbQuery(query, params);
+  const totalRow = await dbQueryOne<any>('SELECT COUNT(*) as count FROM orders');
+  const total = totalRow?.count || 0;
 
   return NextResponse.json({ orders, total });
 }
