@@ -99,9 +99,16 @@ export default function HomePage() {
     return () => clearInterval(interval);
   }, [authLoading, fetchUnreadAlerts]);
 
-  const handleResetData = async () => {
+  const handleClearDemoData = async () => {
+    const confirmed = window.confirm(
+      lang === 'ar' 
+        ? 'هل أنت متأكد من تفريغ كافة البيانات التجريبية السابقة وبدء العمل الفعلي النظيف بنسبة 100%؟' 
+        : 'Confirmez-vous la suppression de toutes les données démo pour démarrer en mode réel 100% ?'
+    );
+    if (!confirmed) return;
+
     try {
-      await fetch('/api/seed', { method: 'POST' });
+      await fetch('/api/seed?action=clear', { method: 'POST' });
       fetchUnreadAlerts();
       window.location.reload();
     } catch { /* ignore */ }
@@ -178,12 +185,14 @@ export default function HomePage() {
           unreadAlerts={unreadAlerts}
           setCurrentPage={setCurrentPage}
           onOpenSimulator={() => setSimulatorOpen(true)}
-          onResetData={handleResetData}
+          onResetData={handleClearDemoData}
+          onClearDemoData={handleClearDemoData}
           theme={theme}
           onToggleTheme={toggleTheme}
           user={user}
           onLogout={handleLogout}
         />
+
         
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 w-full">
           {renderPage()}

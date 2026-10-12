@@ -10,8 +10,9 @@ interface TopBarProps {
   setSidebarOpen: (v: boolean) => void;
   unreadAlerts: number;
   setCurrentPage: (p: Page) => void;
-  onOpenSimulator: () => void;
-  onResetData: () => void;
+  onOpenSimulator?: () => void;
+  onResetData?: () => void;
+  onClearDemoData?: () => void;
   theme?: 'dark' | 'light';
   onToggleTheme?: () => void;
   user?: { name: string; email: string; role: string } | null;
@@ -53,17 +54,18 @@ const pageTitles: Record<string, { ar: string; fr: string; subtitle: { ar: strin
 
 export default function TopBar({ 
   lang, setLang, currentPage, setSidebarOpen, unreadAlerts, 
-  setCurrentPage, onOpenSimulator, onResetData,
+  setCurrentPage, onOpenSimulator, onResetData, onClearDemoData,
   theme = 'dark', onToggleTheme, user, onLogout
 }: TopBarProps) {
   const isAr = lang === 'ar';
   const pageInfo = pageTitles[currentPage] || pageTitles.dashboard;
-  const [resetting, setResetting] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
-  const handleReset = async () => {
-    setResetting(true);
-    await onResetData();
-    setTimeout(() => setResetting(false), 800);
+  const handleClear = async () => {
+    if (!onClearDemoData) return;
+    setClearing(true);
+    await onClearDemoData();
+    setTimeout(() => setClearing(false), 800);
   };
 
   return (
@@ -89,15 +91,26 @@ export default function TopBar({
 
       {/* Right / End: Actions */}
       <div className="flex items-center gap-2 md:gap-2.5 flex-shrink-0">
-        {/* Webhook Simulator Button */}
-        <button
-          onClick={onOpenSimulator}
-          className="btn-primary text-xs py-1.5 px-3 rounded-xl shadow-purple-900/30 font-medium"
-          title={isAr ? 'محاكاة وصول Webhook' : 'Simuler un Webhook'}
-        >
-          <Zap size={14} className="text-yellow-300" />
-          <span className="hidden md:inline">{isAr ? 'محاكاة Webhook' : 'Simuler Webhook'}</span>
-        </button>
+        {/* Live System Status Dot */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
+          <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+          <span className="text-[11px] text-emerald-400 font-bold tracking-tight">
+            {isAr ? 'الربط الفعلي نشط' : 'Production Live'}
+          </span>
+        </div>
+
+        {/* Clear Demo Data Button (for clean production transition) */}
+        {onClearDemoData && (
+          <button
+            onClick={handleClear}
+            disabled={clearing}
+            className="py-1.5 px-2.5 rounded-xl bg-slate-800/60 hover:bg-rose-500/15 border border-slate-700/60 hover:border-rose-500/30 text-xs font-semibold text-slate-300 hover:text-rose-300 transition flex items-center gap-1.5"
+            title={isAr ? 'تفريغ البيانات التجريبية وبدء العمل الفعلي' : 'Nettoyer les données démo'}
+          >
+            <RefreshCw size={13} className={clearing ? 'animate-spin text-rose-400' : 'text-slate-400'} />
+            <span className="hidden xl:inline">{isAr ? 'تفريغ التجريبي' : 'Vider Démo'}</span>
+          </button>
+        )}
 
         {/* Theme Toggle Button (Light / Dark) */}
         {onToggleTheme && (
@@ -118,17 +131,6 @@ export default function TopBar({
           </button>
         )}
 
-        {/* Reset Demo Data */}
-        <button
-          onClick={handleReset}
-          disabled={resetting}
-          className="btn-secondary text-xs py-1.5 px-2.5 rounded-xl text-slate-300 hover:text-white"
-          title={isAr ? 'إعادة ضبط البيانات التجريبية' : 'Réinitialiser Données Démo'}
-        >
-          <RefreshCw size={13} className={resetting ? 'animate-spin' : ''} />
-          <span className="hidden xl:inline">{isAr ? 'بيانات تجريبية' : 'Démo'}</span>
-        </button>
-
         {/* Alerts Bell */}
         <button
           onClick={() => setCurrentPage('alerts')}
@@ -138,6 +140,7 @@ export default function TopBar({
           <Bell size={18} />
           {unreadAlerts > 0 && (
             <span className="absolute -top-1 -end-1 min-w-4 h-4 px-1 bg-red-500 text-white rounded-full text-[10px] font-bold flex items-center justify-center animate-pulse">
+
               {unreadAlerts}
             </span>
           )}

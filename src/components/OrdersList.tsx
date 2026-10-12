@@ -282,17 +282,6 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
               <span>{syncingSendit ? tr.syncing : tr.syncSendit}</span>
             </button>
 
-            {onOpenSimulator && (
-              <button
-                onClick={onOpenSimulator}
-                className="btn-secondary text-xs py-2 px-2.5 rounded-xl text-slate-300"
-                title={tr.simulateOrder}
-              >
-                <Zap size={14} className="text-amber-400" />
-                <span className="hidden xl:inline">{tr.simulateOrder}</span>
-              </button>
-            )}
-
             <button
               onClick={exportCSV}
               className="btn-secondary text-xs py-2 px-3 rounded-xl"
@@ -381,13 +370,29 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
           <p className="text-sm font-semibold">{tr.loading}</p>
         </div>
       ) : orders.length === 0 ? (
-        <div className="card p-12 text-center flex flex-col items-center justify-center gap-3">
-          <Package size={44} className="text-slate-600" />
-          <h3 className="font-bold text-white text-base">{tr.noOrders}</h3>
-          <p className="text-xs text-slate-400 max-w-sm">
-            {isAr ? 'حاول تغيير معايير البحث أو استخدم زر "محاكاة طرد" لتوليد بيانات فورية' : 'Essayez d\'ajuster vos filtres ou simulez un nouveau colis.'}
-          </p>
+        <div className="card p-12 text-center flex flex-col items-center justify-center gap-3.5 bg-[#0d1322]/80 border border-slate-800 rounded-3xl animate-fade-up">
+          <div className="w-16 h-16 rounded-2xl bg-purple-600/15 border border-purple-500/25 flex items-center justify-center text-purple-400">
+            <Package size={34} />
+          </div>
+          <div>
+            <h3 className="font-extrabold text-white text-base md:text-lg">
+              {isAr ? 'المنصة جاهزة لاستقبال وإدارة الطرود الفعلية' : 'Plateforme prête pour vos colis réels'}
+            </h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+              {isAr 
+                ? 'لا توجد طلبات مسجلة حالياً. ستظهر الطرود هنا فور وصولها تلقائياً عبر Webhook Sendit عند أي حركة شحن، أو يمكنك إنشاء ودفع شحنة جديدة مباشرة بنقرة زر.' 
+                : 'Aucun colis pour le moment. Les colis apparaîtront automatiquement via le Webhook Sendit ou vous pouvez créer une expédition.'}
+            </p>
+          </div>
+          <button
+            onClick={() => setCreateModalOpen(true)}
+            className="btn-primary text-xs py-2.5 px-4 rounded-xl mt-1 font-bold flex items-center gap-1.5"
+          >
+            <Plus size={15} />
+            <span>{isAr ? 'دفع شحنة جديدة إلى Sendit الآن' : 'Créer une expédition Sendit maintenant'}</span>
+          </button>
         </div>
+
       ) : (
         <div className="grid grid-cols-1 gap-3">
           {orders.map(order => {
