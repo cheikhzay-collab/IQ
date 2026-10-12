@@ -40,11 +40,11 @@ const t = {
     hide: 'إخفاء المفاتيح',
     alertsSection: '🔔 تنبيهات الخطورة اللوجستية',
     criticalThreshold: 'عدد المحاولات الفاشلة لإطلاق تنبيه حرج',
-    notesSection: '📝 تعليمات ربط Sendit Webhook',
-    notesText: `1. توجه إلى لوحة تحكم Sendit (app.sendit.ma) > Paramètres > Webhooks.
-2. ضع رابط Webhook الخاص بك أعلاه.
-3. عند تحديث حالة أي طرد (Livré, Reporté, Refusé, En cours)، ستستقبل المنصة الإشعار فورياً وتقوم بتحليله عبر الذكاء الاصطناعي.
-4. إذا كنت تعمل محلياً (Localhost)، استخدم أداة مثل Ngrok أو Cloudflare Tunnel لتمرير رابط عام لـ Sendit.`,
+    notesSection: '📝 تعليمات ربط Sendit (API & Webhook)',
+    notesText: `1. للحصول على مفاتيح API: ادخل إلى حسابك في Sendit (app.sendit.ma) > Paramètres > Intégrations API.
+2. انسخ Public Key و Secret Key وضعهما في الحقول أعلاه واضغط "اختبار اتصال API" للتأكد من الاتصال.
+3. لتلقي تحديثات الطرود لحظياً: انسخ رابط Webhook وضعْه في Sendit (Paramètres > Webhooks).
+4. بعد ضبط المفاتيح، اضغط على "مزامنة حية مع Sendit" في شاشة الطلبات لجلب طرودك وتحديثها مباشرة.`,
   },
   fr: {
     title: 'Paramètres & Intégrations',
@@ -77,22 +77,25 @@ const t = {
     hide: 'Masquer les clés',
     alertsSection: '🔔 Alertes Logistiques',
     criticalThreshold: 'Tentatives pour alerte critique',
-    notesSection: '📝 Guide de liaison Sendit Webhook',
-    notesText: `1. Accédez à app.sendit.ma > Paramètres > Webhooks.
-2. Renseignez l'URL Webhook ci-dessus.
-3. Dès qu'un colis change de statut (Livré, Reporté, Refusé, En cours), DeliveryIQ met à jour le tableau de bord et active l'IA.
-4. En local, utilisez un tunnel public comme Ngrok pour que Sendit puisse envoyer les requêtes.`,
+    notesSection: '📝 Guide de liaison Sendit (API & Webhook)',
+    notesText: `1. Obtenez vos clés API sur app.sendit.ma > Paramètres > Intégrations API.
+2. Copiez votre Public Key et Secret Key dans les champs ci-dessus puis cliquez sur "Tester l'API".
+3. Renseignez l'URL Webhook dans app.sendit.ma > Paramètres > Webhooks pour les mises à jour en direct.
+4. Utilisez le bouton "Sync Sendit" dans l'onglet Commandes pour synchroniser tous vos colis en temps réel.`,
   },
 };
 
 export default function SettingsPanel({ lang }: Props) {
   const tr = t[lang];
+  const isAr = lang === 'ar';
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showTokens, setShowTokens] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testingSendit, setTestingSendit] = useState(false);
+  const [senditTestResult, setSenditTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const [settings, setSettings] = useState({
     senditLibelle: 'GAMA',
@@ -151,6 +154,41 @@ export default function SettingsPanel({ lang }: Props) {
     navigator.clipboard.writeText(text);
     setCopiedKey(id);
     setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleTestSenditApi = async () => {
+    setTestingSendit(true);
+    setSenditTestResult(null);
+    try {
+      const res = await fetch('/api/sendit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'test',
+          publicKey: settings.senditPublicKey,
+          secretKey: settings.senditPrivateKey,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSenditTestResult({
+          success: true,
+          message: isAr ? '✅ الاتصال بـ Sendit ناجح ومفعل! المفاتيح معتمدة.' : '✅ Connexion API Sendit validée avec succès !',
+        });
+      } else {
+        setSenditTestResult({
+          success: false,
+          message: data.error || (isAr ? '❌ فشل الاتصال بـ Sendit: تأكد من صحة المفاتيح.' : '❌ Échec de connexion : Vérifiez vos clés API.'),
+        });
+      }
+    } catch {
+      setSenditTestResult({
+        success: false,
+        message: isAr ? '❌ تعذر الاتصال بالخادم' : '❌ Erreur de communication',
+      });
+    } finally {
+      setTestingSendit(false);
+    }
   };
 
   const handleTestWebhook = async () => {
@@ -285,6 +323,41 @@ export default function SettingsPanel({ lang }: Props) {
           copyId="priv"
           hint="تُستخدم للتحقق من مصادقة الـ Webhooks والتواصل المشفر مع خوادم Sendit"
         />
+
+        {/* Live Test Sendit API Credentials */}
+        <div className="pt-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-cyan-950/20 p-3 rounded-xl border border-cyan-500/20">
+          <div>
+            <p className="text-xs font-bold text-cyan-200">
+              {isAr ? 'فحص الاتصال بحساب Sendit' : 'Tester la connexion API Sendit'}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {isAr ? 'التحقق المباشر من صحة الـ Public Key و Secret Key عبر تسجيل الدخول بخادم Sendit' : 'Vérifier la validité des clés auprès du serveur app.sendit.ma'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleTestSenditApi}
+            disabled={testingSendit}
+            className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 text-cyan-300 border-cyan-500/30 hover:bg-cyan-900/40"
+          >
+            {testingSendit ? <RefreshCw size={13} className="animate-spin" /> : <ShieldCheck size={13} className="text-cyan-400" />}
+            <span>
+              {testingSendit 
+                ? (isAr ? 'جاري الفحص...' : 'Vérification...') 
+                : (isAr ? 'اختبار اتصال API' : 'Tester l\'API')}
+            </span>
+          </button>
+        </div>
+
+        {senditTestResult && (
+          <div className={`p-3 rounded-xl border text-xs font-medium animate-fade-up ${
+            senditTestResult.success 
+              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' 
+              : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+          }`}>
+            {senditTestResult.message}
+          </div>
+        )}
 
         {/* Webhook Endpoint Box */}
         <div className="pt-2 border-t border-slate-800/60">

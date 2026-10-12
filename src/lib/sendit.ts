@@ -50,11 +50,130 @@ export async function getSenditCredentials() {
   }
 
   return {
-    libelle: map['sendit_libelle'] || process.env.SENDIT_LIBELLE || 'GAMA',
-    publicKey: map['sendit_public_key'] || process.env.SENDIT_PUBLIC_KEY || '3d4232babb11df9a39165b4fcaf88057',
-    privateKey: map['sendit_private_key'] || process.env.SENDIT_PRIVATE_KEY || 'RzRVrol6hv3OHMmcaYDPzBI2KianmSZQ',
+    libelle: (map['sendit_libelle'] || process.env.SENDIT_LIBELLE || 'GAMA').trim(),
+    publicKey: (map['sendit_public_key'] || process.env.SENDIT_PUBLIC_KEY || '').trim(),
+    privateKey: (map['sendit_private_key'] || process.env.SENDIT_PRIVATE_KEY || '').trim(),
     apiUrl: 'https://app.sendit.ma/api/v1',
   };
+}
+
+// In-memory token cache (valid for ~50 minutes)
+let cachedAuth: { token: string; expiresAt: number; keyFingerprint: string } | null = null;
+
+/**
+ * Obtain a valid Bearer Token from Sendit API via POST /api/v1/login
+ */
+export async function getSenditAuthToken(customKeys?: { publicKey?: string; secretKey?: string }): Promise<{
+  success: boolean;
+  token?: string;
+  error?: string;
+}> {
+  const creds = await getSenditCredentials();
+  const pub = (customKeys?.publicKey || creds.publicKey || '').trim();
+  const sec = (customKeys?.secretKey || creds.privateKey || '').trim();
+
+  if (!pub || !sec) {
+    return {
+      success: false,
+      error: 'مفاتيح Sendit API مفقودة. يرجى إدخال Public Key و Secret Key في شاشة الإعدادات.',
+    };
+  }
+
+  const fingerprint = `${pub}:${sec}`;
+  const now = Date.now();
+
+  if (!customKeys && cachedAuth && cachedAuth.keyFingerprint === fingerprint && cachedAuth.expiresAt > now) {
+    return { success: true, token: cachedAuth.token };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const res = await fetch(`${creds.apiUrl}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        public_key: pub,
+        secret_key: sec,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await res.json().catch(() => null);
+
+    if (res.ok && data?.data?.token) {
+      const token = data.data.token as string;
+      if (!customKeys) {
+        cachedAuth = {
+          token,
+          expiresAt: now + 50 * 60 * 1000,
+          keyFingerprint: fingerprint,
+        };
+      }
+      return { success: true, token };
+    }
+
+    const msg = data?.message || `HTTP ${res.status}`;
+    return {
+      success: false,
+      error: `فشل تسجيل الدخول إلى Sendit (${msg}). يرجى التحقق من صحة المفاتيح في حسابك على app.sendit.ma`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: `تعذر الاتصال بخادم Sendit: ${err?.message || 'Timeout/Network error'}`,
+    };
+  }
+}
+
+/**
+ * Test Sendit API Credentials connectivity
+ */
+export async function testSenditConnection(keys?: { publicKey?: string; secretKey?: string }) {
+  const auth = await getSenditAuthToken(keys);
+  if (!auth.success || !auth.token) {
+    return {
+      success: false,
+      error: auth.error || 'فشل الاتصال بـ Sendit',
+    };
+  }
+
+  return {
+    success: true,
+    message: 'تم التحقق من بيانات الاتصال بنجاح! الاتصال بـ Sendit نشط ويعمل.',
+  };
+}
+
+/**
+ * Clean Moroccan phone number to standard 10-digit format (06/07)
+ */
+function sanitizePhoneNumber(phone: string): string {
+  const clean = phone.replace(/[^0-9]/g, '');
+  if (clean.startsWith('212') && clean.length === 12) {
+    return '0' + clean.slice(3);
+  }
+  if ((clean.startsWith('6') || clean.startsWith('7')) && clean.length === 9) {
+    return '0' + clean;
+  }
+  return clean;
+}
+
+/**
+ * Resolve District ID from City name
+ */
+function resolveDistrictId(cityName: string): number {
+  const normalized = (cityName || '').trim().toLowerCase();
+  for (const d of MOROCCAN_DISTRICTS) {
+    if (d.name.toLowerCase() === normalized || d.name_ar === cityName) {
+      return d.id;
+    }
+  }
+  return 1; // Default to Casablanca (1)
 }
 
 /**
@@ -62,61 +181,63 @@ export async function getSenditCredentials() {
  */
 export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
   const creds = await getSenditCredentials();
+  const auth = await getSenditAuthToken();
+
   const trackingNumber = params.orderReference || `SND-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 900 + 100)}`;
-  
+  const districtId = resolveDistrictId(params.city);
+
   let remoteSuccess = false;
   let remoteData: any = null;
   let remoteError = '';
 
-  // Attempt real API call to Sendit endpoint
-  try {
-    const payload = {
-      order_id: trackingNumber,
-      client: {
+  if (auth.success && auth.token) {
+    try {
+      const payload = {
+        reference: trackingNumber,
         name: params.clientName,
-        phone: params.clientPhone,
-        address: params.address,
-        city: params.city,
-      },
-      delivery: {
-        price: params.price,
+        phone: sanitizePhoneNumber(params.clientPhone),
+        address: params.address || params.city,
+        amount: Number(params.price || 0),
+        pickup_district_id: 1, // Default pickup district
+        district_id: districtId,
         comment: `${params.productNote || 'Colis DeliveryIQ'} ${params.allowOpen ? '[Ouvrir: Oui]' : ''} ${params.canTry ? '[Essai: Oui]' : ''}`.trim(),
-        open: !!params.allowOpen,
-        exchange: false,
-      },
-      api_key: creds.publicKey,
-    };
+        allow_try: params.canTry ? 1 : 0,
+        allow_open: params.allowOpen ? 1 : 0,
+        products: params.productNote || 'Colis DeliveryIQ',
+      };
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
 
-    const res = await fetch(`${creds.apiUrl}/deliveries`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${creds.privateKey}`,
-        'X-Sendit-Key': creds.publicKey,
-        'X-Sendit-Libelle': creds.libelle,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
+      const res = await fetch(`${creds.apiUrl}/deliveries`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
 
-    if (res.ok) {
-      remoteData = await res.json();
-      remoteSuccess = true;
-    } else {
-      const errText = await res.text();
-      remoteError = `Sendit HTTP ${res.status}: ${errText.slice(0, 120)}`;
+      const resJson = await res.json().catch(() => null);
+
+      if (res.ok && (resJson?.success || resJson?.data)) {
+        remoteData = resJson.data || resJson;
+        remoteSuccess = true;
+      } else {
+        remoteError = resJson?.message || `HTTP ${res.status}`;
+      }
+    } catch (err: any) {
+      remoteError = err?.message || 'Connection error to app.sendit.ma';
     }
-  } catch (err: any) {
-    remoteError = err?.message || 'Connection error to app.sendit.ma';
+  } else {
+    remoteError = auth.error || 'Non authentifié';
   }
 
-  // Final tracking code (from remote if returned, else generated SND standard)
-  const finalTracking = remoteData?.tracking_code || remoteData?.code_barre || trackingNumber;
+  // Final tracking code (from remote if returned, else reference)
+  const finalTracking = remoteData?.code || remoteData?.tracking_code || remoteData?.code_barre || trackingNumber;
   const initialStatus = 'En attente';
   const now = new Date().toISOString();
 
@@ -144,7 +265,9 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
       initialStatus,
       0,
       'low',
-      'تم إنشاء الشحنة وتجهيزها للاستلام من Sendit (Ramassage)',
+      remoteSuccess 
+        ? 'تم دفع الشحنة بنجاح إلى منصة Sendit' 
+        : `تم الحفظ محلياً (${remoteError})`,
       now
     ]
   );
@@ -158,14 +281,14 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
       finalTracking,
       initialStatus,
       'Création Colis Sendit',
-      remoteSuccess ? `Poussé avec succès vers Sendit (${creds.libelle})` : `Enregistré localement (Mode hybride: ${remoteError || 'Prêt'})`,
+      remoteSuccess ? `Poussé avec succès vers Sendit (${creds.libelle})` : `Enregistré localement (Erreur Sendit: ${remoteError})`,
       now
     ]
   );
 
-
   return {
-    success: true,
+    success: remoteSuccess,
+    localSaved: true,
     tracking: finalTracking,
     barcode: `*${finalTracking}*`,
     remoteSuccess,
@@ -185,21 +308,41 @@ export async function pushDeliveryToSendit(params: CreateDeliveryParams) {
 /**
  * Fetch / Synchronize deliveries from Sendit
  */
-export async function syncSenditDeliveries() {
+export async function syncSenditDeliveries(): Promise<{
+  success: boolean;
+  syncedCount: number;
+  remoteFetched: boolean;
+  error?: string;
+  message?: string;
+  timestamp: string;
+}> {
   const creds = await getSenditCredentials();
+  const auth = await getSenditAuthToken();
+
+  // If credentials fail or are invalid, return an explicit error! Do NOT fake success!
+  if (!auth.success || !auth.token) {
+    return {
+      success: false,
+      syncedCount: 0,
+      remoteFetched: false,
+      error: auth.error || 'فشل الاتصال بـ Sendit: تأكد من صحة المفاتيح في الإعدادات.',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   let liveCount = 0;
   let remoteFetched = false;
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
+    // Call GET /api/v1/deliveries
     const res = await fetch(`${creds.apiUrl}/deliveries`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'Authorization': `Bearer ${creds.privateKey}`,
-        'X-Sendit-Key': creds.publicKey,
+        'Authorization': `Bearer ${auth.token}`,
       },
       signal: controller.signal,
     });
@@ -207,15 +350,17 @@ export async function syncSenditDeliveries() {
 
     if (res.ok) {
       const data = await res.json();
-      const deliveries = Array.isArray(data) ? data : data.data || [];
-      if (deliveries.length > 0) {
+      const deliveries = Array.isArray(data) ? data : (data.data || []);
+      
+      if (Array.isArray(deliveries) && deliveries.length > 0) {
         remoteFetched = true;
         for (const d of deliveries) {
-          const tracking = d.code_barre || d.tracking_code || d.order_id;
+          const tracking = d.code || d.code_barre || d.tracking_code || d.order_id || d.reference;
           if (!tracking) continue;
 
           const status = mapSenditStatus(d.status || d.current_status);
-          const riskLevel = computeRiskLevel(status, d.attempts || 0);
+          const attempts = Number(d.attempts || d.attempt_count || 1);
+          const riskLevel = computeRiskLevel(status, attempts);
 
           await dbRun(
             `INSERT INTO orders 
@@ -225,89 +370,121 @@ export async function syncSenditDeliveries() {
               status = VALUES(status),
               attempt_count = VALUES(attempt_count),
               risk_level = VALUES(risk_level),
+              notes = VALUES(notes),
               last_updated = VALUES(last_updated)`,
             [
               tracking,
               tracking,
-              d.client?.name || d.name || 'عميل Sendit',
-              d.client?.phone || d.phone || '0600000000',
-              d.client?.city || d.city || 'Casablanca',
-              d.client?.address || d.address || '',
-              Number(d.price || d.total || 250),
-              d.delivery?.comment || 'Colis Sendit API',
+              d.name || d.client?.name || 'عميل Sendit',
+              d.phone || d.client?.phone || '0600000000',
+              d.district?.name || d.city || d.client?.city || 'Casablanca',
+              d.address || d.client?.address || '',
+              Number(d.amount || d.price || d.total || 0),
+              d.comment || d.products || 'Colis Sendit API',
               status,
-              Number(d.attempts || 1),
+              attempts,
               riskLevel,
               `مزامنة مباشرة من Sendit API (${new Date().toLocaleTimeString('fr-MA')})`,
+              new Date().toISOString()
+            ]
+          );
+
+          await dbRun(
+            `INSERT INTO events (order_id, tracking, status, reason, note, timestamp)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+              tracking,
+              tracking,
+              status,
+              'Mise à jour Sendit Live API',
+              `تم جلب التحديث مباشرة من منصة Sendit (${status})`,
               new Date().toISOString()
             ]
           );
           liveCount++;
         }
       }
+    } else {
+      const errText = await res.text().catch(() => '');
+      return {
+        success: false,
+        syncedCount: 0,
+        remoteFetched: false,
+        error: `خطأ من Sendit API (${res.status}): ${errText.slice(0, 100)}`,
+        timestamp: new Date().toISOString(),
+      };
     }
-  } catch (err) {
-    // If external endpoint is unreachable, fallback to syncing current pending orders with live simulated status progression
+  } catch (err: any) {
+    return {
+      success: false,
+      syncedCount: 0,
+      remoteFetched: false,
+      error: `تعذر الاتصال بـ Sendit: ${err?.message || 'Connection error'}`,
+      timestamp: new Date().toISOString(),
+    };
   }
 
-  // If remote was unreachable or empty, perform intelligent real-time progression on local orders
-  if (!remoteFetched) {
-    const pendingOrders = await dbQuery<any>(
-      `SELECT * FROM orders WHERE status NOT IN ('Livré', 'Refusé', 'Retourné') ORDER BY last_updated ASC LIMIT 5`
-    );
+  // Also query status of any existing pending orders tracked in Sendit
+  const existingTracked = await dbQuery<{ id: string; tracking: string }>(
+    `SELECT id, tracking FROM orders WHERE tracking IS NOT NULL AND status NOT IN ('Livré', 'Refusé', 'Retourné') LIMIT 15`
+  );
 
-    const STATUS_FLOW = ['En attente', 'Ramassé', 'En cours de livraison', 'Livré', 'Reporté'];
+  for (const ord of existingTracked) {
+    if (!ord.tracking) continue;
+    try {
+      const singleRes = await fetch(`${creds.apiUrl}/deliveries/${encodeURIComponent(ord.tracking)}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${auth.token}`,
+        },
+      });
+      if (singleRes.ok) {
+        const singleData = await singleRes.json();
+        const d = singleData.data || singleData;
+        if (d && (d.status || d.current_status)) {
+          const status = mapSenditStatus(d.status || d.current_status);
+          const attempts = Number(d.attempts || 1);
+          const riskLevel = computeRiskLevel(status, attempts);
 
-    for (const ord of pendingOrders) {
-      const curIdx = STATUS_FLOW.indexOf(ord.status);
-      const nextStatus = curIdx >= 0 && curIdx < STATUS_FLOW.length - 1 ? STATUS_FLOW[curIdx + 1] : 'Livré';
-      const newAttempts = (ord.attempt_count || 0) + 1;
-      const risk = computeRiskLevel(nextStatus, newAttempts);
-
-      await dbRun(
-        `UPDATE orders 
-         SET status = ?, attempt_count = ?, risk_level = ?, last_updated = ?
-         WHERE id = ?`,
-        [nextStatus, newAttempts, risk, new Date().toISOString(), ord.id]
-      );
-
-      await dbRun(
-        `INSERT INTO events (order_id, tracking, status, reason, note, timestamp)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          ord.id,
-          ord.tracking || ord.id,
-          nextStatus,
-          'Mise à jour Sendit Live',
-          `تحديث تلقائي عبر مزامنة Sendit الفورية`,
-          new Date().toISOString()
-        ]
-      );
-      liveCount++;
+          await dbRun(
+            `UPDATE orders 
+             SET status = ?, attempt_count = ?, risk_level = ?, last_updated = ?
+             WHERE id = ? OR tracking = ?`,
+            [status, attempts, riskLevel, new Date().toISOString(), ord.id, ord.tracking]
+          );
+          liveCount++;
+        }
+      }
+    } catch {
+      // Individual check skipped
     }
   }
 
   return {
     success: true,
     syncedCount: liveCount,
-    remoteFetched,
-    timestamp: new Date().toISOString()
+    remoteFetched: true,
+    message: liveCount > 0 
+      ? `تم جلب وتحديث ${liveCount} طلب بنجاح من حساب Sendit!` 
+      : 'تم الاتصال بـ Sendit بنجاح، لا توجد طلبات جديدة حالياً.',
+    timestamp: new Date().toISOString(),
   };
 }
 
-function mapSenditStatus(raw: string): string {
+export function mapSenditStatus(raw: string): string {
   if (!raw) return 'En cours de livraison';
-  const l = raw.toLowerCase();
-  if (l.includes('livr') || l.includes('deliver') || l.includes('payé')) return 'Livré';
-  if (l.includes('refus') || l.includes('reject')) return 'Refusé';
-  if (l.includes('report') || l.includes('postpon')) return 'Reporté';
-  if (l.includes('retour') || l.includes('return')) return 'Retourné';
-  if (l.includes('cours') || l.includes('distrib') || l.includes('transit')) return 'En cours de livraison';
-  if (l.includes('ramass') || l.includes('pickup') || l.includes('reçu')) return 'En attente';
+  const l = raw.toLowerCase().trim();
+  if (l === 'delivered' || l.includes('livr') || l.includes('payé')) return 'Livré';
+  if (l === 'rejected' || l === 'canceled' || l.includes('refus') || l.includes('annul')) return 'Refusé';
+  if (l === 'postponed' || l === 'unreachable' || l.includes('report') || l.includes('injoign')) return 'Reporté';
+  if (l === 'returned' || l.includes('retour')) return 'Retourné';
+  if (l === 'delivering' || l === 'transit' || l === 'distributed' || l.includes('cours') || l.includes('distrib')) return 'En cours de livraison';
+  if (l === 'pending' || l === 'to_prepare' || l === 'to_pickup' || l === 'pickedup' || l.includes('ramass') || l.includes('attente')) return 'En attente';
   return 'En cours de livraison';
 }
 
-function computeRiskLevel(status: string, attempts: number): string {
+export function computeRiskLevel(status: string, attempts: number): string {
   if (status === 'Refusé' || status === 'Retourné') return 'critical';
   if (status === 'Reporté' || attempts >= 3) return 'high';
   if (attempts === 2) return 'medium';

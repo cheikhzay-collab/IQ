@@ -4,7 +4,7 @@ import type { Lang } from '@/app/page';
 import {
   Search, Filter, Package, AlertTriangle, Phone,
   MessageSquare, RefreshCw, ChevronDown, Send, Bot, Eye,
-  MapPin, CheckCircle2, Clock, XCircle, Download, Plus, Zap
+  MapPin, CheckCircle2, Clock, XCircle, Download, Plus, Zap, AlertCircle
 } from 'lucide-react';
 import OrderDetailsModal from './OrderDetailsModal';
 import CreateOrderModal from './CreateOrderModal';
@@ -116,7 +116,7 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
 
   // Sendit Live Sync state
   const [syncingSendit, setSyncingSendit] = useState(false);
-  const [syncToast, setSyncToast] = useState<string | null>(null);
+  const [syncToast, setSyncToast] = useState<{ message: string; isError?: boolean } | null>(null);
 
   // Quick AI generation state
   const [generatingId, setGeneratingId] = useState<string | null>(null);
@@ -154,15 +154,27 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
       });
       const data = await res.json();
       await fetchOrders();
-      setSyncToast(
-        isAr 
-          ? `تمت المزامنة بنجاح! تم تحديث ${data.syncedCount || 0} شحنة مع Sendit` 
-          : `Synchronisation réussie ! ${data.syncedCount || 0} colis mis à jour`
-      );
+      if (!data.success) {
+        setSyncToast({
+          message: data.error || (isAr ? 'فشلت المزامنة مع Sendit' : 'Échec de synchronisation Sendit'),
+          isError: true,
+        });
+        setTimeout(() => setSyncToast(null), 6000);
+      } else {
+        setSyncToast({
+          message: data.message || (isAr 
+            ? `تمت المزامنة بنجاح! تم تحديث ${data.syncedCount || 0} شحنة مع Sendit` 
+            : `Synchronisation réussie ! ${data.syncedCount || 0} colis mis à jour`),
+          isError: false,
+        });
+        setTimeout(() => setSyncToast(null), 4500);
+      }
+    } catch (err: any) {
+      setSyncToast({
+        message: isAr ? 'فشلت المزامنة: تعذر الاتصال بالخادم' : 'Échec de synchronisation avec le serveur',
+        isError: true,
+      });
       setTimeout(() => setSyncToast(null), 4000);
-    } catch {
-      setSyncToast(isAr ? 'فشلت المزامنة' : 'Échec de synchronisation');
-      setTimeout(() => setSyncToast(null), 3000);
     }
     setSyncingSendit(false);
   };
@@ -303,14 +315,22 @@ export default function OrdersList({ lang, onOpenSimulator }: Props) {
 
         {/* Sync Toast Notification */}
         {syncToast && (
-          <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-950/60 to-purple-950/60 border border-cyan-500/40 text-cyan-200 text-xs font-semibold flex items-center justify-between animate-fade-up">
+          <div className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between animate-fade-up ${
+            syncToast.isError 
+              ? 'bg-rose-950/70 border-rose-500/50 text-rose-200 shadow-lg shadow-rose-950/40' 
+              : 'bg-gradient-to-r from-cyan-950/70 to-purple-950/70 border-cyan-500/40 text-cyan-200'
+          }`}>
             <div className="flex items-center gap-2">
-              <CheckCircle2 size={16} className="text-cyan-400" />
-              <span>{syncToast}</span>
+              {syncToast.isError ? (
+                <AlertCircle size={16} className="text-rose-400 shrink-0" />
+              ) : (
+                <CheckCircle2 size={16} className="text-cyan-400 shrink-0" />
+              )}
+              <span>{syncToast.message}</span>
             </div>
             <button 
               onClick={() => setSyncToast(null)} 
-              className="text-cyan-400/80 hover:text-cyan-200 text-xs"
+              className={`text-xs ml-3 ${syncToast.isError ? 'text-rose-400 hover:text-rose-200' : 'text-cyan-400/80 hover:text-cyan-200'}`}
             >
               ✕
             </button>

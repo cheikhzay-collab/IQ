@@ -82,6 +82,10 @@ export default function CreateOrderModal({ isOpen, onClose, lang, onSuccess }: P
         throw new Error(data.error || 'Failed to create order');
       }
 
+      if (!data.remoteSuccess && data.remoteError) {
+        throw new Error(isAr ? `فشل الإرسال إلى Sendit: ${data.remoteError}` : `Échec de transmission Sendit: ${data.remoteError}`);
+      }
+
       setSuccessResult(data);
       onSuccess();
     } catch (err: any) {

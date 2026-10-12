@@ -1,6 +1,6 @@
 // src/app/api/sendit/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { pushDeliveryToSendit, syncSenditDeliveries, MOROCCAN_DISTRICTS } from '@/lib/sendit';
+import { pushDeliveryToSendit, syncSenditDeliveries, testSenditConnection, MOROCCAN_DISTRICTS } from '@/lib/sendit';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -8,6 +8,11 @@ export async function GET(req: NextRequest) {
 
   if (type === 'districts') {
     return NextResponse.json({ districts: MOROCCAN_DISTRICTS });
+  }
+
+  if (type === 'test') {
+    const result = await testSenditConnection();
+    return NextResponse.json(result);
   }
 
   return NextResponse.json({
@@ -21,6 +26,12 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const action = body.action || 'push';
+
+    if (action === 'test') {
+      const { publicKey, secretKey } = body;
+      const result = await testSenditConnection(publicKey && secretKey ? { publicKey, secretKey } : undefined);
+      return NextResponse.json(result);
+    }
 
     if (action === 'push') {
       const { clientName, clientPhone, city, address, price, productNote, allowOpen, canTry, orderReference } = body;
@@ -51,7 +62,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   } catch (err: any) {
-    console.error('Sendit API Error:', err);
+    console.error('Sendit API Route Error:', err);
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }
